@@ -148,6 +148,7 @@ Item {
       kind: kind,
       icon: raw.icon || "",
       label: raw.label || id,
+      searchLabel: raw.searchLabel || "",
       target: raw.target || "",
       keywords: normalizeKeywords(id, aliases, raw.keywords),
       description: raw.description || "",
@@ -398,17 +399,19 @@ Item {
   }
 
   // Label with the ✓ marker baked in when `checked:` evaluated truthy.
-  function labelFor(entry) {
+  // `searchLabel` overrides `label` when passed (used in search results).
+  function labelFor(entry, searchLabel) {
     if (!entry) return ""
-    if (entry.checked && root.checkedResults[entry.id]) return entry.label + " ✓"
-    return entry.label
+    var base = searchLabel || entry.label
+    if (entry.checked && root.checkedResults[entry.id]) return base + " ✓"
+    return base
   }
 
   function matchesQuery(entry, query) {
     if (!entry || entry.id === "root") return false
     if (!root.isVisible(entry)) return false
 
-    var haystack = (entry.label + " " + root.pathFor(entry.id) + " " + entry.keywords + " " + entry.description).toLowerCase()
+    var haystack = (entry.label + " " + entry.searchLabel + " " + root.pathFor(entry.id) + " " + entry.keywords + " " + entry.description).toLowerCase()
     var terms = query.toLowerCase().trim().split(/\s+/)
 
     for (var i = 0; i < terms.length; i++) {
@@ -421,6 +424,7 @@ Item {
   function searchScore(entry, query) {
     var needle = query.toLowerCase().trim()
     var label = entry.label.toLowerCase()
+    var searchLabel = (entry.searchLabel || "").toLowerCase()
     var path = root.pathFor(entry.id).toLowerCase()
     var keywords = entry.keywords.toLowerCase()
     var parent = root.item(entry.parent)
@@ -428,10 +432,13 @@ Item {
     var score = 80
 
     if (label === needle) score = entry.parent === "root" ? 2 : 0
+    else if (searchLabel === needle) score = 1
     else if (label.indexOf(needle) === 0) score = 10
+    else if (searchLabel.indexOf(needle) === 0) score = 11
     else if (path.indexOf(needle) === 0) score = entry.kind === "action" ? 12 : 14
     else if (parentLabel === needle) score = entry.kind === "action" ? 18 : 20
     else if (label.indexOf(needle) >= 0) score = 30
+    else if (searchLabel.indexOf(needle) >= 0) score = 31
     else if (path.indexOf(needle) >= 0) score = 40
     else if (keywords.indexOf(needle) >= 0) score = 50
 
@@ -440,13 +447,13 @@ Item {
     return score * 1000 + root.depthFor(entry.id) * 25 + entry.order
   }
 
-  function displayRow(entry, detail, score, section) {
+  function displayRow(entry, detail, score, section, searchLabel) {
     var target = entry.kind === "link" ? entry.target : entry.id
     return {
       itemId: entry.id,
       kind: entry.kind,
       icon: entry.icon,
-      label: root.labelFor(entry),
+      label: root.labelFor(entry, searchLabel),
       target: target,
       detail: detail || "",
       path: root.pathFor(entry.id),
@@ -479,8 +486,7 @@ Item {
         if (!root.isDescendantOf(entry.id, active)) continue
         if (!root.matchesQuery(entry, query)) continue
 
-        var detail = root.parentPathFor(entry.id)
-        var row = root.displayRow(entry, detail, root.searchScore(entry, query))
+        var row = root.displayRow(entry, "", root.searchScore(entry, query), "", entry.searchLabel)
         if (entry.parent === active) currentRows.push(row)
         else drilldownRows.push(row)
       }

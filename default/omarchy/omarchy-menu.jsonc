@@ -9,6 +9,7 @@
   // Optional fields:
   //   aliases        alternate `omarchy-shell menu summon <name>` routes; also searchable
   //   keywords       extra search terms beyond id/label/aliases
+  //   searchLabel    semantic title shown only during search
   //   when           shell condition; hide row when it fails
   //   checked        shell condition; append ✓ when it succeeds
 
@@ -86,7 +87,7 @@
   "trigger.toggle.passwordless-sudo": {"icon":"󰟵","label":"Passwordless Sudo","action":"omarchy-launch-floating-terminal-with-presentation omarchy-sudo-passwordless"},
 
   // Style
-  "style.theme": {"icon":"󰸌","label":"Theme","aliases":["theme","themes"],"keywords":"colors","action":"theme=$(omarchy-theme-switcher); [[ -n $theme ]] && omarchy-theme-set \"$theme\""},
+  "style.theme": {"icon":"󰸌","label":"Theme","searchLabel":"Switch Theme","aliases":["theme","themes"],"keywords":"colors","action":"theme=$(omarchy-theme-switcher); [[ -n $theme ]] && omarchy-theme-set \"$theme\""},
   "style.unlock": {"icon":"󰟵","label":"Unlock","keywords":"themes","action":"omarchy-launch-walker -m menus:omarchyunlocks --width 800 --minheight 400"},
   "style.font": {"icon":"","label":"Font","keywords":"typeface","provider":"fonts"},
   "style.background": {"icon":"","label":"Background","aliases":["background","wallpaper"],"action":"background=$(omarchy-theme-bg-switcher); [[ -n $background ]] && omarchy-theme-bg-set \"$background\""},
@@ -108,7 +109,7 @@
   "style.screensaver.text": {"icon":"","label":"Edit Text","keywords":"branding","action":"omarchy-branding-screensaver text"},
   "style.screensaver.image": {"icon":"","label":"Set From Image","keywords":"branding","action":"omarchy-branding-screensaver image"},
   "style.screensaver.default": {"icon":"","label":"Restore Default","keywords":"branding","action":"omarchy-branding-screensaver reset"},
-  "style.install.theme": {"icon":"󰸌","label":"Theme","action":"omarchy-launch-floating-terminal-with-presentation omarchy-theme-install"},
+  "style.install.theme": {"icon":"󰸌","label":"Theme","searchLabel":"Install Theme","action":"omarchy-launch-floating-terminal-with-presentation omarchy-theme-install"},
   "style.install.background": {"icon":"","label":"Background","keywords":"wallpaper","action":"omarchy-theme-bg-install"},
   "style.install.font": {"icon":"","label":"Font"},
   "style.install.font.cascadia": {"icon":"","label":"Cascadia Mono","action":"omarchy-install-font 'Cascadia Mono' ttf-cascadia-mono-nerd 'CaskaydiaMono Nerd Font'"},
@@ -247,7 +248,7 @@
   "remove.webapp": {"icon":"","label":"Web App","keywords":"uninstall","action":"omarchy-launch-floating-terminal-with-presentation omarchy-webapp-remove"},
   "remove.tui": {"icon":"","label":"TUI","keywords":"uninstall terminal app","action":"omarchy-launch-floating-terminal-with-presentation omarchy-tui-remove"},
   "remove.development": {"icon":"󰵮","label":"Development","keywords":"uninstall languages"},
-  "remove.theme": {"icon":"󰸌","label":"Theme","keywords":"uninstall","action":"omarchy-launch-floating-terminal-with-presentation omarchy-theme-remove"},
+  "remove.theme": {"icon":"󰸌","label":"Theme","searchLabel":"Remove Theme","keywords":"uninstall","action":"omarchy-launch-floating-terminal-with-presentation omarchy-theme-remove"},
   "remove.browser": {"icon":"","label":"Browser","keywords":"uninstall"},
   "remove.dictation": {"icon":"","label":"Dictation","keywords":"uninstall voice","action":"omarchy-launch-floating-terminal-with-presentation omarchy-voxtype-remove"},
   "remove.gaming": {"icon":"","label":"Gaming","keywords":"uninstall steam retroarch minecraft"},
@@ -297,7 +298,7 @@
   "update.omarchy": {"icon":"","label":"Omarchy","keywords":"system","action":"omarchy-launch-floating-terminal-with-presentation omarchy-update"},
   "update.channel": {"icon":"󰔫","label":"Channel","keywords":"stable rc edge dev"},
   "update.config": {"icon":"","label":"Config","keywords":"refresh default"},
-  "update.themes": {"icon":"󰸌","label":"Extra Themes","action":"omarchy-launch-floating-terminal-with-presentation omarchy-theme-update"},
+  "update.themes": {"icon":"󰸌","label":"Extra Themes","searchLabel":"Update Extra Themes","action":"omarchy-launch-floating-terminal-with-presentation omarchy-theme-update"},
   "update.process": {"icon":"","label":"Process","keywords":"restart services"},
   "update.hardware": {"icon":"󰇅","label":"Hardware","keywords":"restart audio wifi bluetooth trackpad"},
   "update.firmware": {"icon":"","label":"Firmware","keywords":"fwupd","action":"omarchy-launch-floating-terminal-with-presentation omarchy-update-firmware"},
