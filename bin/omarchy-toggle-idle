@@ -1,13 +1,6 @@
 #!/bin/bash
 
-# omarchy:summary=Toggle hypridle idle locking
+# omarchy:summary=Toggle idle behavior so the system either idles normally or stays awake
 
-if pgrep -x hypridle >/dev/null; then
-  pkill -x hypridle
-  notify-send -u low "󱫖    Stop locking computer when idle"
-else
-  uwsm-app -- hypridle >/dev/null 2>&1 &
-  notify-send -u low "󱫖    Now locking computer when idle"
-fi
-
-pkill -RTMIN+9 waybar
+omarchy-shell idle toggle
+omarchy-shell -q Indicators refresh

@@ -2,12 +2,12 @@
 name: omarchy
 description: >
   REQUIRED for end-user customization of Linux desktop, window manager, or system config.
-  Use when editing ~/.config/hypr/, ~/.config/waybar/, ~/.config/walker/,
-  ~/.config/alacritty/, ~/.config/foot/, ~/.config/kitty/, ~/.config/ghostty/, ~/.config/mako/,
-  or ~/.config/omarchy/. Triggers: Hyprland, window rules, animations, keybindings,
-  monitors, gaps, borders, blur, opacity, waybar, walker, terminal config, themes,
-  background, night light, idle, lock screen, screenshots, reminders, layer rules,
-  workspace settings, display config, and user-facing omarchy commands. Excludes Omarchy
+  Use when editing ~/.config/hypr/, ~/.config/omarchy/,
+  ~/.config/alacritty/, ~/.config/foot/, ~/.config/kitty/, or ~/.config/ghostty/.
+  Triggers: Hyprland, window rules, animations, keybindings, monitors, gaps, borders,
+  blur, opacity, omarchy-shell, bar, terminal config, themes, background,
+  night light, idle, lock screen, screenshots, reminders, layer rules, workspace
+  settings, display config, and user-facing omarchy commands. Excludes Omarchy
   source development in ~/.local/share/omarchy/ and `omarchy dev` workflows.
 ---
 
@@ -23,7 +23,7 @@ It is not for contributing to Omarchy source code.
 **ALWAYS invoke this skill for end-user requests involving ANY of these:**
 
 - Editing ANY file in `~/.config/hypr/` (window rules, animations, keybindings, monitors, etc.)
-- Editing ANY file in `~/.config/waybar/`, `~/.config/walker/`, `~/.config/mako/`
+- Editing `~/.config/omarchy/shell.json` (status bar layout, widgets)
 - Editing terminal configs (alacritty, foot, kitty, ghostty)
 - Editing ANY file in `~/.config/omarchy/`
 - Window behavior, animations, opacity, blur, gaps, borders
@@ -51,13 +51,14 @@ This directory contains Omarchy's source files managed by git. Any changes will 
 ├── config/                 # Default config templates
 ├── themes/                 # Stock themes
 ├── default/                # System defaults
+├── shell/                  # Omarchy shell source and defaults
 ├── migrations/             # Update migrations
 └── install/                # Installation scripts
 ```
 
 **Reading `~/.local/share/omarchy/` is SAFE and useful** - do it freely to:
 - Understand how omarchy commands work: `omarchy theme set --help` or `cat $(which omarchy-theme-set)`
-- See default configs before customizing: `cat ~/.local/share/omarchy/config/waybar/config.jsonc`
+- See default configs before customizing: `cat ~/.local/share/omarchy/shell/shell-defaults.json`
 - Check stock theme files to copy for customization
 - Reference default hyprland settings: `cat ~/.local/share/omarchy/default/hypr/*`
 
@@ -76,11 +77,10 @@ Omarchy is built on:
 |-----------|---------|-----------------|
 | **Arch Linux** | Base OS | `/etc/`, `~/.config/` |
 | **Hyprland** | Wayland compositor/WM | `~/.config/hypr/` |
-| **Waybar** | Status bar | `~/.config/waybar/` |
-| **Walker** | App launcher | `~/.config/walker/` |
+| **Omarchy shell** | Status bar + notifications (Quickshell) | `~/.config/omarchy/shell.json` |
+| **Launcher** | Quickshell launcher | `~/.config/omarchy/shell.json` |
 | **Alacritty/Foot/Kitty/Ghostty** | Terminals | `~/.config/<terminal>/` |
-| **Mako** | Notifications | `~/.config/mako/` |
-| **SwayOSD** | On-screen display | `~/.config/swayosd/` |
+| **Omarchy OSD** | On-screen display | Quickshell plugin |
 
 ## Command Discovery
 
@@ -111,8 +111,8 @@ Run `omarchy --help` for the full list. The most common groups:
 
 | Group | Purpose | Example |
 |-------|---------|---------|
-| `omarchy refresh` | Reset config to defaults (backs up first) | `omarchy refresh waybar` |
-| `omarchy restart` | Restart a service/app | `omarchy restart waybar` |
+| `omarchy refresh` | Reset config to defaults (backs up first) | `omarchy refresh shell` |
+| `omarchy restart` | Restart a service/app | `omarchy-restart-shell` |
 | `omarchy toggle` | Toggle feature on/off | `omarchy toggle nightlight` |
 | `omarchy theme` | Theme management | `omarchy theme set <name>` |
 | `omarchy install` | Install optional software / packages | `omarchy install docker dbs` |
@@ -136,8 +136,7 @@ Run `omarchy --help` for the full list. The most common groups:
 ├── looknfeel.conf     # Appearance (gaps, borders, animations)
 ├── envs.conf          # Environment variables
 ├── autostart.conf     # Startup applications
-├── hypridle.conf      # Idle behavior (screen off, lock, suspend)
-├── hyprlock.conf      # Lock screen appearance
+├── shell.json         # Omarchy shell, bar, idle, and lock settings
 └── hyprsunset.conf    # Night light / blue light filter
 ```
 
@@ -148,17 +147,20 @@ Run `omarchy --help` for the full list. The most common groups:
 - If `hyprctl configerrors` reports errors, address them and rerun validation until clean or until a real blocker is identified
 - Use `omarchy refresh hyprland` to reset to defaults
 
-### Waybar (Status Bar)
+### Omarchy shell (Status Bar + Notifications)
+
+The bar, notification daemon, settings panel, and assorted overlays all run
+inside a single long-running Quickshell process (`omarchy-shell`).
 
 ```
-~/.config/waybar/
-├── config.jsonc       # Bar layout and modules (JSONC format)
-└── style.css          # Styling
+~/.config/omarchy/shell.json      # User overrides: bar.position, bar.layout, plugins[]
+~/.local/share/omarchy/shell/shell-defaults.json   # Canonical defaults
 ```
 
-**Waybar does NOT auto-reload.** You MUST run `omarchy restart waybar` after any config changes.
+The shell hot-reloads `shell.json` on save — no restart needed for layout
+changes. For more invasive changes (new plugin, packaged update):
 
-**Commands:** `omarchy restart waybar`, `omarchy refresh waybar`, `omarchy toggle waybar`
+**Commands:** `omarchy-restart-shell`, `omarchy refresh shell`, `omarchy launch bar settings`
 
 ### Terminals
 
@@ -180,7 +182,6 @@ Run `omarchy --help` for the full list. The most common groups:
 | lazygit | `~/.config/lazygit/config.yml` |
 | starship | `~/.config/starship.toml` |
 | git | `~/.config/git/config` |
-| walker | `~/.config/walker/config.toml` |
 
 ## Safe Customization Patterns
 
@@ -199,8 +200,8 @@ cp ~/.config/hypr/bindings.conf ~/.config/hypr/bindings.conf.bak.$(date +%s)
 
 # 4. Apply changes
 # - Hyprland: auto-reloads on save, but MUST validate with `hyprctl reload` and `hyprctl configerrors`
-# - Waybar: MUST restart with `omarchy restart waybar`
-# - Walker: MUST restart with `omarchy restart walker`
+# - Omarchy shell: shell.json hot-reloads; use `omarchy-restart-shell` for plugin/widget code changes
+# - Launcher: restart with `omarchy restart shell`
 # - Terminals: MUST restart with `omarchy restart terminal`
 ```
 
@@ -237,7 +238,7 @@ When customizations go wrong:
 
 ```bash
 # Reset specific config (creates backup automatically)
-omarchy refresh waybar
+omarchy refresh shell
 omarchy refresh hyprland
 
 # The refresh command:
@@ -341,7 +342,7 @@ omarchy refresh <app>
 
 # Refresh specific config file
 # config-file path is relative to ~/.config/
-# eg. `omarchy refresh config hypr/hyprlock.conf` will refresh ~/.config/hypr/hyprlock.conf
+# eg. `omarchy refresh config hypr/hyprland.lua` will refresh ~/.config/hypr/hyprland.lua
 omarchy refresh config <config-file>
 
 # Full reinstall of configs (nuclear option)
@@ -373,7 +374,7 @@ omarchy reminder clear
 ## Out of Scope
 
 This skill intentionally does not cover Omarchy source development. Do not use this skill for:
-- Editing files in `~/.local/share/omarchy/` (`bin/`, `config/`, `default/`, `themes/`, `migrations/`, etc.)
+- Editing files in `~/.local/share/omarchy/` (`bin/`, `config/`, `default/`, `shell/`, `themes/`, `migrations/`, etc.)
 - Creating or editing migrations
 - Running `omarchy dev ...` commands
 
@@ -389,4 +390,4 @@ This skill intentionally does not cover Omarchy source development. Do not use t
 - "Clear all reminders" -> `omarchy reminder clear`
 - "Customize the catppuccin theme colors" -> Create `~/.config/omarchy/themes/catppuccin-custom/` by copying from stock, then edit
 - "Run a script every time I change themes" -> Create `~/.config/omarchy/hooks/theme-set`
-- "Reset waybar to defaults" -> `omarchy refresh waybar`
+- "Reset shell/bar to defaults" -> `omarchy refresh shell`

@@ -1,7 +1,7 @@
 # Omarchy core package list installed via install/packaging/base.sh
 # This file is also used by the ISO builder when determining needs
 
-1password-beta
+1password
 1password-cli
 aether
 alsa-utils
@@ -9,7 +9,9 @@ asdcontrol
 avahi
 bash-completion
 bat
-bluetui
+bluez
+bluez-tools
+bluez-utils
 bolt
 brightnessctl
 btop
@@ -40,6 +42,7 @@ ffmpegthumbnailer
 fontconfig
 foot
 fzf
+git
 github-cli
 gnome-calculator
 gnome-keyring
@@ -50,19 +53,16 @@ gum
 gvfs-mtp
 gvfs-nfs
 gvfs-smb
-hypridle
 hyprland
 hyprland-guiutils
 hyprland-preview-share-picker
-hyprlock
 hyprpicker
 hyprsunset
 imagemagick
-impala
 imv
 inetutils
 inxi
-iwd
+networkmanager
 jq
 kdenlive
 kernel-modules-hook
@@ -77,7 +77,6 @@ libreoffice-fresh
 llvm
 localsend
 luarocks
-mako
 man-db
 mariadb-libs
 mise
@@ -93,18 +92,16 @@ nvim
 obs-studio
 obsidian
 omarchy-nvim
-omarchy-walker
 pamixer
 pinta
-playerctl
 plocate
 plymouth
-polkit-gnome
 postgresql-libs
 power-profiles-daemon
 python-gobject
 python-poetry-core
 python-terminaltexteffects
+qemu-user-static-binfmt
 qt5-wayland
 quickshell
 ripgrep
@@ -118,8 +115,6 @@ spotify
 socat
 starship
 sushi
-swaybg
-swayosd
 system-config-printer
 tesseract
 tesseract-data-eng
@@ -136,10 +131,8 @@ ufw-docker
 unzip
 usage
 uwsm
-waybar
 whois
 wireless-regdb
-wiremix
 wireplumber
 wl-clipboard
 woff2-font-awesome

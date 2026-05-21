@@ -31,7 +31,7 @@ Common prefixes include:
 
 Other current prefixes include:
 
-- `ac-`, `audio-`, `battery-`, `branch-`, `brightness-`, `channel-`, `config-`, `debug-`, `dev-`, `drive-`, `first-`, `font-`, `haptic-`, `hibernation-`, `hook-`, `hyprland-`, `menu-`, `migrate-`, `notification-`, `npx-`, `plymouth-`, `powerprofiles-`, `reinstall-`, `remove-`, `screensaver-`, `show-`, `snapshot-`, `state-`, `sudo-`, `swayosd-`, `system-`, `transcode-`, `tui-`, `tz-`, `upload-`, `version-`, `voxtype-`, `webapp-`, `wifi-`, `windows-`
+- `ac-`, `audio-`, `battery-`, `branch-`, `brightness-`, `channel-`, `config-`, `debug-`, `dev-`, `drive-`, `first-`, `font-`, `haptic-`, `hibernation-`, `hook-`, `hyprland-`, `menu-`, `migrate-`, `notification-`, `npm-`, `plymouth-`, `powerprofiles-`, `reinstall-`, `remove-`, `screensaver-`, `show-`, `snapshot-`, `state-`, `sudo-`, `system-`, `transcode-`, `tui-`, `tz-`, `upload-`, `version-`, `voxtype-`, `webapp-`, `wifi-`, `windows-`
 
 # Command Metadata
 
@@ -40,8 +40,6 @@ Commands in `bin/` can declare CLI metadata in comments near the top of the file
 Supported metadata keys:
 
 - `# omarchy:summary=...` - short help text
-- `# omarchy:group=...` - command group when it differs from the filename-derived prefix
-- `# omarchy:name=...` - command name within the group
 - `# omarchy:args=...` - usage arguments
 - `# omarchy:examples=...` - examples separated with ` | `
 - `# omarchy:alias=...` / `# omarchy:aliases=...` - alternate routes
@@ -59,6 +57,11 @@ Example:
 # omarchy:examples=omarchy screenshot | omarchy capture screenshot region
 # omarchy:aliases=omarchy screenshot
 ```
+
+# Runtime Environment
+
+- `$OMARCHY_PATH` is set at the top level by the uwsm session environment and is always available to Omarchy runtime code.
+- Commands in `bin/` and Quickshell QML should rely on `$OMARCHY_PATH` / `Quickshell.env("OMARCHY_PATH")`; do not derive fallback paths from `HOME`, `Quickshell.shellDir`, or re-export/default `OMARCHY_PATH` manually.
 
 # Install Scripts
 
@@ -82,6 +85,7 @@ Use these instead of raw shell commands:
 - `omarchy-cmd-missing` / `omarchy-cmd-present` - check for commands
 - `omarchy-pkg-missing` / `omarchy-pkg-present` - check for packages
 - `omarchy-pkg-add` - install packages (handles both pacman and AUR)
+- `omarchy-pkg-drop` - remove packages; use this instead of raw `pacman -R*`
 - `omarchy-notification-send` - send desktop notifications; do not call `notify-send` directly
 - `omarchy-hw-asus-rog` - detect ASUS ROG hardware (and similar `hw-*` commands)
 
@@ -95,11 +99,51 @@ Exceptions are allowed for bootstrap, preflight, migration, and package-helper s
 
 # Visual Changes
 
-When making visual changes, such as Waybar styles or desktop appearance, always take and analyze a screenshot after applying the change to verify the result. Use `omarchy capture screenshot fullscreen save` for fullscreen screenshots.
+When making visual changes, such as omarchy-shell styling or desktop appearance, always take and analyze a screenshot after applying the change to verify the result. Use `omarchy capture screenshot fullscreen save` for fullscreen screenshots.
 
 For interactive UI work, use `wtype` to simulate keyboard input when available. Example: start the UI in the background, wait briefly for focus, then run `wtype -k Right -k Return` to exercise keyboard selection and confirm the resulting command output or state change. Prefer this over manual-only verification when a UI returns a selected value or changes a symlink/config.
 
 When testing layer-shell UI, capture the reference and candidate states as separate screenshots, then compare them visually before further edits. If a launched UI would otherwise remain open, keep track of its PID and stop it after the screenshot; avoid broad process kills unless checking with `ps` first.
+
+# Omarchy shell
+
+The Quickshell desktop runs as a single long-running process out of
+`shell/`. Hyprland autostart launches it directly with `quickshell -p`; do
+not start additional standalone `quickshell -p` instances for individual
+components.
+
+Run `omarchy-restart-shell` after making changes to QML files.
+
+Plugin contract:
+
+- Each plugin lives in its own directory under
+  `shell/plugins/<id>/` (first-party) or
+  `~/.config/omarchy/plugins/<id>/` (third-party).
+- Every plugin ships a `manifest.json` declaring `id`, `kinds`,
+  `activation`, and `entryPoints`. The full schema is in
+  [`docs/omarchy-shell.md`](docs/omarchy-shell.md).
+- Entry-point QML files are `Item`s (not `ShellRoot`), and accept the
+  shell-injected properties `omarchyPath`, `shell`, `manifest`, and
+  `pluginRegistry` / `barWidgetRegistry` as appropriate.
+- Panel / overlay / menu plugins must expose `open(payloadJson)` and
+  `close()` lifecycle methods for `shell summon` and `shell hide`.
+
+IPC:
+
+- `bin/omarchy-shell` is the canonical IPC entry point. It forwards to
+  the running shell and does not start it. Prefer it over re-implementing
+  direct Quickshell socket calls in every CLI.
+- The `shell` IPC target exposes `ping`, `summon`, `hide`, `toggle`,
+  `rescanPlugins`, `setPluginEnabled`, and `listPlugins`. Individual
+  plugins can register additional IPC targets (the bar registers `bar`,
+  the background switcher registers `image-selector`).
+
+Widget files in `shell/plugins/bar/widgets/` contain Nerd Font glyphs as raw
+unicode characters. The `Write` and `Edit` tools strip multi-byte
+codepoints in some positions — do **not** rewrite widget files wholesale
+through those tools. For glyph fixes, use the targeted `Edit` tool with
+the surrounding context, or a Python script that inserts codepoints via
+`chr(0xXXXXX)`.
 
 # Refresh Pattern
 
@@ -125,12 +169,3 @@ New migration format:
 Some older migrations predate these rules. Do not copy older migrations that start with shebangs, omit the leading `echo`, or hard-code `~/.local/share/omarchy`.
 
 Migrations may use raw `pacman`, `command -v`, or direct config edits when needed for historical compatibility or one-off repair work.
-
-Example:
-```bash
-echo "Disable fingerprint in hyprlock if fingerprint auth is not configured"
-
-if omarchy-cmd-missing fprintd-list || ! fprintd-list "$USER" 2>/dev/null | grep -q "finger"; then
-  sed -i 's/fingerprint:enabled = .*/fingerprint:enabled = false/' ~/.config/hypr/hyprlock.conf
-fi
-```

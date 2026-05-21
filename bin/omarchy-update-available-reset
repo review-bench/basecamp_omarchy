@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# omarchy:summary=Ensure Waybar icon offering the available update is removed
+# omarchy:summary=Ensure the status bar icon offering the available update is removed
 
-pkill -RTMIN+7 waybar
+omarchy-shell -q SystemUpdate refresh
 exit 0

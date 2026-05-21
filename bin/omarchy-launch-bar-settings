@@ -1,0 +1,5 @@
+#!/bin/bash
+
+# omarchy:summary=Launch the Omarchy bar settings panel
+
+exec omarchy-shell shell summon omarchy.settings "{}"
