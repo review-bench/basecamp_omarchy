@@ -88,19 +88,35 @@ Panel {
     return "󰂯"
   }
 
+  property int phraseIndex: 0
+  readonly property var activePhrases: [
+    "Untangling wires",
+    "Streaming vikings",
+    "Pairing mysteries",
+    "Herding headsets",
+    "Taming radios",
+    "Summoning speakers",
+    "Wrangling codecs",
+    "Polishing packets"
+  ]
+  readonly property bool rotatingPhrases: adapter && adapter.enabled
+  readonly property string heroStatusText: {
+    if (!adapter) return "No adapter"
+    if (!adapter.enabled) return "Bluetooth off"
+    return activePhrases[phraseIndex % activePhrases.length]
+  }
+
   // Single cursor model shared by keyboard and mouse. Sections:
-  //   "header"     — 2 action pills (scan, toggle); h/l moves between
-  //                  them, Enter activates.
   //   "connected"  — currently connected devices; Enter disconnects.
   //   "known"      — remembered devices; Enter connects.
   //   "discovered" — unremembered devices visible while scanning; Enter connects.
   // Visuals always come from CursorSurface (hasCursor / current),
   // never from containsMouse. Mouse hover updates root cursor state too,
   // guaranteeing one highlight on screen.
-  property string focusSection: "header"
-  property int selectedIndex: 1  // default = toggle pill once the cursor is revealed
+  property string focusSection: "connected"
+  property int selectedIndex: 0
+  property bool actionFocused: false
   property bool cursorActive: false
-  readonly property int headerPillCount: 2
 
   // Stable identity for the focused device. Devices move between sections as
   // they connect, disconnect, pair, or get forgotten, so follow the BlueZ
@@ -115,7 +131,6 @@ Panel {
     : "transparent"
 
   function sectionCount(section) {
-    if (section === "header") return headerPillCount
     if (section === "connected") return connectedDevices.length
     if (section === "known") return knownDevices.length
     if (section === "discovered") return discoveredDevices.length
@@ -123,7 +138,6 @@ Panel {
   }
 
   function sectionVisible(section) {
-    if (section === "header") return true
     if (section === "connected") return connectedDevices.length > 0
     if (section === "known") return knownDevices.length > 0
     if (section === "discovered") return adapter && adapter.discovering && discoveredDevices.length > 0
@@ -131,7 +145,7 @@ Panel {
   }
 
   readonly property var visibleSections: {
-    var list = ["header"]
+    var list = []
     if (sectionVisible("connected")) list.push("connected")
     if (sectionVisible("known")) list.push("known")
     if (sectionVisible("discovered")) list.push("discovered")
@@ -228,59 +242,48 @@ Panel {
     if (changed) pendingActions = next
   }
 
-  // j/k navigates between sections row-by-row. The header is treated as a
-  // SINGLE row (its pills sit on one horizontal line), so j/k from devices
-  // jumps to/from the header as a unit, and h/l moves between the three
-  // pills inside it. This matches wifi's DNS-pill behaviour.
+  // j/k navigates between device sections row-by-row.
   function moveCursor(delta) {
     var sections = visibleSections
     if (!sections || sections.length === 0) return
     var sIdx = sections.indexOf(focusSection)
-    if (sIdx < 0) { focusSection = sections[0]; selectedIndex = 0; return }
+    if (sIdx < 0) { focusSection = sections[0]; selectedIndex = 0; actionFocused = false; return }
 
     var idx = selectedIndex
-    var inHeader = focusSection === "header"
-    var max = inHeader ? 0 : sectionCount(focusSection) - 1
+    var max = sectionCount(focusSection) - 1
 
     if (delta > 0) {
-      if (!inHeader && idx < max) { selectedIndex = idx + 1; return }
+      if (idx < max) { selectedIndex = idx + 1; actionFocused = false; return }
       if (sIdx < sections.length - 1) {
         focusSection = sections[sIdx + 1]
-        // Entering the header from below shouldn't happen (header is first),
-        // but other entries start at 0.
         selectedIndex = 0
+        actionFocused = false
       }
     } else {
-      if (!inHeader && idx > 0) { selectedIndex = idx - 1; return }
+      if (idx > 0) { selectedIndex = idx - 1; actionFocused = false; return }
       if (sIdx > 0) {
         focusSection = sections[sIdx - 1]
-        // Entering the header always lands on the toggle pill — the most
-        // common action and consistent with the on-open default. h/l from
-        // there moves to scan.
-        selectedIndex = focusSection === "header" ? 1 : sectionCount(focusSection) - 1
+        selectedIndex = sectionCount(focusSection) - 1
+        actionFocused = false
       }
     }
   }
 
-  // h/l: only meaningful in the header. In device sections it's a no-op
-  // — j/k is the canonical row navigator there.
   function moveCursorH(delta) {
-    if (focusSection !== "header") return
-    var next = selectedIndex + delta
-    if (next < 0) next = 0
-    if (next > headerPillCount - 1) next = headerPillCount - 1
-    selectedIndex = next
+    if (!cursorActive) { cursorActive = true; return }
+    if (focusSection !== "known") return
+    var dev = deviceAt(focusSection, selectedIndex)
+    if (!dev || dev.connected) return
+    if (delta > 0) actionFocused = true
+    else if (delta < 0) actionFocused = false
   }
 
   function activateCursor() {
-    if (focusSection === "header") {
-      if (selectedIndex === 0) {
-        if (adapter && adapter.enabled) adapter.discovering = !adapter.discovering
-      } else if (selectedIndex === 1) {
-        if (adapter) adapter.enabled = !adapter.enabled
-      }
+    if (actionFocused) {
+      deleteSelected()
       return
     }
+
     if (focusSection === "connected" || focusSection === "known") {
       var dev = deviceAt(focusSection, selectedIndex)
       if (!dev) return
@@ -295,17 +298,14 @@ Panel {
     }
   }
 
-  // 'x' on a known row mirrors the row's X button: connected device
-  // disconnects, everything else forgets the pairing. Mismatching this
-  // (e.g. forgetting a connected device) is destructive — the X button
-  // tooltip says "Disconnect" for connected rows, and the keybind has
-  // to agree.
+  // 'x' forgets remembered devices. Connected rows toggle connection via
+  // Enter/click, so the destructive forget action is intentionally unavailable
+  // while connected.
   function deleteSelected() {
-    if (focusSection !== "connected" && focusSection !== "known") return
+    if (focusSection !== "known") return
     var dev = deviceAt(focusSection, selectedIndex)
     if (!dev) return
-    if (dev.connected) disconnectDevice(dev)
-    else forgetDevice(dev)
+    forgetDevice(dev)
   }
 
   onOpenedChanged: {
@@ -313,16 +313,13 @@ Panel {
       if (adapter && adapter.enabled && !adapter.discovering) adapter.discovering = true
       if (connectedDevices.length > 0) { focusSection = "connected"; selectedIndex = 0 }
       else if (knownDevices.length > 0) { focusSection = "known"; selectedIndex = 0 }
-      else { focusSection = "header"; selectedIndex = 1 }
+      else if (discoveredDevices.length > 0) { focusSection = "discovered"; selectedIndex = 0 }
+      actionFocused = false
       cursorActive = false
     }
   }
 
   function updateFocusedAddress() {
-    if (focusSection === "header") {
-      focusedDeviceAddress = ""
-      return
-    }
     var d = deviceAt(focusSection, selectedIndex)
     focusedDeviceAddress = d ? (d.address || "") : ""
   }
@@ -376,7 +373,10 @@ Panel {
 
   function clampCursor() {
     var sections = visibleSections
-    if (!sections || !sections.length) return
+    if (!sections || !sections.length) {
+      selectedIndex = 0
+      return
+    }
     if (sections.indexOf(focusSection) < 0) {
       focusSection = sections[0]
       selectedIndex = 0
@@ -413,13 +413,54 @@ Panel {
     onTriggered: root.pendingActions = ({})
   }
 
+  Timer {
+    id: phraseTimer
+    interval: 2800
+    running: root.opened && root.rotatingPhrases
+    repeat: true
+    onTriggered: phraseSwap.restart()
+  }
+
+  SequentialAnimation {
+    id: phraseSwap
+    PropertyAnimation {
+      target: heroStatus; property: "opacity"
+      to: 0.0; duration: 180; easing.type: Easing.OutQuad
+    }
+    ScriptAction {
+      script: root.phraseIndex = (root.phraseIndex + 1) % root.activePhrases.length
+    }
+    PropertyAnimation {
+      target: heroStatus; property: "opacity"
+      to: 1.0; duration: 260; easing.type: Easing.InQuad
+    }
+  }
+
+  Connections {
+    target: root
+    function onRotatingPhrasesChanged() {
+      if (!root.rotatingPhrases) {
+        phraseSwap.stop()
+        heroStatus.opacity = 1.0
+      }
+    }
+  }
+
+  function toggleBluetooth() {
+    if (!adapter) return
+    adapter.enabled = !adapter.enabled
+    if (adapter.enabled) Qt.callLater(function() {
+      if (root.adapter) root.adapter.discovering = true
+    })
+  }
+
   WidgetButton {
     id: button
     anchors.fill: parent
     bar: root.bar
     text: root.icon
     onPressed: function(b) {
-      if (b === Qt.RightButton && root.adapter) root.adapter.enabled = !root.adapter.enabled
+      if (b === Qt.RightButton) root.toggleBluetooth()
       else if (b === Qt.MiddleButton) root.bar.run("omarchy-launch-bluetooth")
       else root.toggle()
     }
@@ -432,7 +473,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(320))
+    contentWidth: panel.fittedContentWidth(Style.space(380))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
 
     PanelKeyCatcher {
@@ -452,54 +493,65 @@ Panel {
         anchors.fill: parent
         spacing: Style.space(10)
 
-        // Header: title left, on/off toggle + actions right.
+        // ---------- Hero: Bluetooth icon · status ----------
         Item {
           width: parent.width
-          height: titleText.implicitHeight
+          implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight)
 
-          Row {
+          Text {
+            id: heroIcon
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(8)
+            text: root.icon
+            color: root.bar.foreground
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.display
+            opacity: root.adapter && root.adapter.enabled ? 1.0 : 0.5
 
-            PanelSectionHeader {
-              id: titleText
-              text: "Bluetooth"
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              fontSize: Style.font.bodySmall
-              anchors.verticalCenter: parent.verticalCenter
+            MouseArea {
+              id: heroIconMouse
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: root.adapter ? Qt.PointingHandCursor : Qt.ArrowCursor
+              enabled: !!root.adapter
+              onClicked: root.toggleBluetooth()
             }
 
-            Text {
-              text: "· " + (root.adapter && root.adapter.enabled ? "On" : "Off")
-              color: Qt.darker(root.bar.foreground, 1.8)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              anchors.verticalCenter: parent.verticalCenter
+            PanelToolTip {
+              visible: heroIconMouse.containsMouse
+              text: root.adapter && root.adapter.enabled ? "Turn Bluetooth off" : "Turn Bluetooth on"
+              fontFamily: root.bar.fontFamily
             }
           }
 
-          Row {
+          Column {
+            id: heroLabels
+            anchors.left: heroIcon.right
+            anchors.leftMargin: Style.space(14)
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(4)
+            spacing: Style.space(2)
 
-            HeaderPill {
-              pillIndex: 0
-              iconText: "󰑐"
-              iconSpinning: root.adapter && root.adapter.discovering
-              tooltipText: !root.adapter ? "" : !root.adapter.enabled ? "Bluetooth is off"
-                : root.adapter.discovering ? "Stop scanning" : "Scan for devices"
-              pillEnabled: root.adapter !== null && root.adapter.enabled
-              onActivated: if (root.adapter) root.adapter.discovering = !root.adapter.discovering
+            Text {
+              text: "Bluetooth"
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.title
+              font.bold: true
+              elide: Text.ElideRight
+              width: parent.width
             }
 
-            HeaderPill {
-              pillIndex: 1
-              iconText: root.adapter && root.adapter.enabled ? "󰂲" : "󰂯"
-              tooltipText: root.adapter && root.adapter.enabled ? "Turn Bluetooth off" : "Turn Bluetooth on"
-              onActivated: if (root.adapter) root.adapter.enabled = !root.adapter.enabled
+            Text {
+              id: heroStatus
+              text: root.heroStatusText.toUpperCase()
+              color: Qt.darker(root.bar.foreground, 1.4)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: 1.2
+              elide: Text.ElideRight
+              width: parent.width
             }
           }
         }
@@ -525,7 +577,7 @@ Panel {
             // Connected devices.
             PanelSectionHeader {
               visible: root.connectedDevices.length > 0
-              text: "Connected"
+              text: "CONNECTED"
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
             }
@@ -546,7 +598,7 @@ Panel {
             // Remembered devices.
             PanelSectionHeader {
               visible: root.knownDevices.length > 0
-              text: "Paired"
+              text: "PAIRED"
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
             }
@@ -567,7 +619,7 @@ Panel {
             // Discovered (unpaired) devices, only shown while scanning.
             PanelSectionHeader {
               visible: root.adapter && root.adapter.discovering && root.discoveredDevices.length > 0
-              text: "Available"
+              text: "AVAILABLE"
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
             }
@@ -592,7 +644,7 @@ Panel {
               text: !root.adapter ? "No Bluetooth adapter"
                   : !root.adapter.enabled ? "Turn Bluetooth on to scan"
                   : root.adapter.discovering ? "Scanning for devices…"
-                  : "No paired devices. Tap the scan icon to find new ones."
+                  : "No paired devices. Reopen this panel to scan again."
               color: Qt.darker(root.bar.foreground, 1.5)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.bodySmall
@@ -602,35 +654,6 @@ Panel {
           }
         }
       }
-    }
-  }
-
-  // Header pill: a Button bound into the panel's "header" cursor
-  // section. Button collapses what used to be a Button subclass +
-  // overlay MouseArea into one component; we keep the pillIndex / activated
-  // shim here so the three header pill instantiations stay readable.
-  component HeaderPill: Button {
-    id: pill
-    required property int pillIndex
-    property bool pillEnabled: true
-    signal activated()
-
-    foreground: root.bar.foreground
-    fontFamily: root.bar.fontFamily
-    horizontalPadding: Style.spacing.md
-    verticalPadding: Style.spacing.labelGap
-    iconSize: 14
-    enabled: pillEnabled
-    opacity: pillEnabled ? 1 : 0.4
-
-    hasCursor: root.cursorActive && root.focusSection === "header" && root.selectedIndex === pillIndex
-
-    onClicked: pill.activated()
-    onHovered: function(isHovered) {
-      if (!isHovered) return
-      root.cursorActive = true
-      root.focusSection = "header"
-      root.selectedIndex = pill.pillIndex
     }
   }
 
@@ -646,8 +669,18 @@ Panel {
     readonly property bool isConnected: dev && dev.connected
     readonly property int devState: dev && dev.state !== undefined ? dev.state : -1
     readonly property string action: root.pendingAction(dev ? dev.address : "")
+    readonly property string actionTooltip: {
+      if (!dev) return ""
+      if (isConnected) return "Disconnect"
+      if (isDiscovered) return "Pair"
+      return "Connect"
+    }
 
-    hasCursor: root.cursorActive && root.focusSection === sectionName && root.selectedIndex === rowIndex
+    readonly property bool rowSelected: root.cursorActive && root.focusSection === sectionName && root.selectedIndex === rowIndex
+    readonly property bool forgetAvailable: sectionName === "known" && !isConnected && !isDiscovered
+    readonly property bool showForgetButton: forgetAvailable && (rowMouse.containsMouse || rowSelected)
+
+    hasCursor: rowSelected && !root.actionFocused
     onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(row)
     current: isConnected
     foreground: root.bar.foreground
@@ -686,6 +719,7 @@ Panel {
         root.cursorActive = true
         root.focusSection = row.sectionName
         root.selectedIndex = row.rowIndex
+        root.actionFocused = false
       }
 
       onClicked: function(mouse) {
@@ -695,9 +729,15 @@ Panel {
           else if (!row.isDiscovered) root.forgetDevice(row.dev)
           return
         }
-        if (row.isConnected) return  // use the X button to disconnect
-        root.connectDevice(row.dev)
+        if (row.isConnected) root.disconnectDevice(row.dev)
+        else root.connectDevice(row.dev)
       }
+    }
+
+    PanelToolTip {
+      visible: row.actionTooltip !== "" && rowMouse.containsMouse && !root.actionFocused
+      text: row.actionTooltip
+      fontFamily: root.bar.fontFamily
     }
 
     Item {
@@ -707,7 +747,7 @@ Panel {
       anchors.verticalCenter: parent.verticalCenter
       anchors.leftMargin: Style.space(10)
       anchors.rightMargin: Style.space(10)
-      implicitHeight: Math.max(deviceIcon.implicitHeight, info.implicitHeight, disconnectBtn.implicitHeight)
+      implicitHeight: Math.max(deviceIcon.implicitHeight, info.implicitHeight, forgetBtn.implicitHeight)
 
       Text {
         id: deviceIcon
@@ -719,32 +759,13 @@ Panel {
         anchors.verticalCenter: parent.verticalCenter
       }
 
-      // Explicit close button on any known device. Action depends on state:
-      // connected -> disconnect, otherwise -> forget the pairing entirely.
-      PanelActionButton {
-        id: disconnectBtn
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        visible: !row.isDiscovered
-        iconText: "󰅙"
-        tooltipText: row.isConnected ? "Disconnect" : "Forget"
-        foreground: root.bar.foreground
-        hoverColor: root.bar.urgent
-        fontFamily: root.bar.fontFamily
-        onClicked: {
-          if (!row.dev) return
-          if (row.isConnected) root.disconnectDevice(row.dev)
-          else root.forgetDevice(row.dev)
-        }
-      }
-
       Column {
         id: info
         spacing: Style.space(1)
         anchors.left: deviceIcon.right
         anchors.leftMargin: Style.space(10)
-        anchors.right: disconnectBtn.visible ? disconnectBtn.left : parent.right
-        anchors.rightMargin: disconnectBtn.visible ? Style.space(8) : 0
+        anchors.right: forgetBtn.visible ? forgetBtn.left : parent.right
+        anchors.rightMargin: forgetBtn.visible ? Style.space(8) : 0
         anchors.verticalCenter: parent.verticalCenter
 
         Text {
@@ -763,6 +784,33 @@ Panel {
           font.pixelSize: Style.font.caption
           elide: Text.ElideRight
           width: parent.width
+        }
+      }
+
+      PanelActionButton {
+        id: forgetBtn
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        visible: row.showForgetButton
+        iconText: "󰅙"
+        tooltipText: "Forget"
+        foreground: root.bar.foreground
+        hoverColor: root.bar.foreground
+        fontFamily: root.bar.fontFamily
+        hasCursor: row.rowSelected && root.actionFocused
+        onHovered: function(isHovered) {
+          if (!isHovered) {
+            if (rowMouse.containsMouse) root.actionFocused = false
+            return
+          }
+          root.cursorActive = true
+          root.focusSection = row.sectionName
+          root.selectedIndex = row.rowIndex
+          root.actionFocused = true
+        }
+        onClicked: {
+          if (!row.dev) return
+          root.forgetDevice(row.dev)
         }
       }
     }

@@ -18,7 +18,29 @@ Panel {
   }
 
   // Live connection details from `ip` / /sys / iw.
-  property var info: ({})  // { iface, type, ip, prefix, gateway, speed, duplex, ssid, signal, freq, bitrate }
+  property var info: ({})  // { iface, type, ip, prefix, gateway, speed, duplex, ssid, signal, freq, bitrate, rx_bytes, tx_bytes }
+
+  // Throughput tracking. Rates are computed as deltas between successive
+  // `omarchy-network-status --verbose` samples (~1.5s apart via detailsPoll).
+  // We hold "prev" alongside a timestamp so the first sample after open or
+  // after an interface switch doesn't manufacture a spike.
+  property real prevRxBytes: 0
+  property real prevTxBytes: 0
+  property real prevSampleTime: 0
+  property string prevIface: ""
+  property real downloadRate: 0  // bytes/sec
+  property real uploadRate: 0    // bytes/sec
+  property int connectionPhraseIndex: 0
+  readonly property var connectionPhrases: [
+    "Wiring bits",
+    "Handling packets",
+    "Sorting frames",
+    "Hauling bytes",
+    "Routing crumbs",
+    "Counting collisions",
+    "Bending light",
+  ]
+  readonly property string connectionPhrase: connectionPhrases[connectionPhraseIndex % connectionPhrases.length]
   readonly property bool networkManagerAvailable: Networking.backend === NetworkBackendType.NetworkManager
   readonly property var networkDevices: Networking.devices ? Networking.devices.values : []
   readonly property var wifiDevice: findDevice(DeviceType.Wifi)
@@ -51,6 +73,7 @@ Panel {
 
   // Index into `wifiNetworks` for keyboard navigation. -1 = no selection.
   property int selectedIndex: -1
+  property bool wifiActionFocused: false
   property bool cursorActive: false
 
   // Keyboard focus zone for the panel. j/k crosses row boundaries:
@@ -59,7 +82,8 @@ Panel {
   property string focusSection: "dns"  // "header" | "dns" | "wifi"
   property int headerIndex: 0
   readonly property bool canDisconnect: !!connectedWifiNetwork
-  readonly property int headerActionCount: canDisconnect ? 2 : 1
+  readonly property bool headerHasDisconnect: false
+  readonly property int headerActionCount: 0
   readonly property var dnsProviders: ["DHCP", "Cloudflare", "Google", "Custom"]
   property int dnsIndex: 0
 
@@ -76,11 +100,7 @@ Panel {
   }
 
   function activateHeader() {
-    if (canDisconnect && headerIndex === 0) {
-      if (!busy) disconnect(connectedWifiNetwork)
-      return
-    }
-    refresh(true)
+    if (headerHasDisconnect && headerIndex === 0 && !busy) disconnect(connectedWifiNetwork)
   }
 
   function selectDnsByDelta(delta) {
@@ -108,12 +128,18 @@ Panel {
     if (opened) {
       refresh(true)
       selectedIndex = wifiNetworks.length > 0 ? 0 : -1
+      wifiActionFocused = false
       focusSection = wifiNetworks.length > 0 ? "wifi" : "dns"
       var idx = dnsProviders.indexOf(dnsProvider)
       dnsIndex = idx >= 0 ? idx : 0
       cursorActive = false
-    } else if (wifiDevice) {
-      wifiDevice.scannerEnabled = false
+    } else {
+      // Reset throughput tracking so the next open doesn't compute a fake
+      // rate from a sample taken minutes ago.
+      prevSampleTime = 0
+      downloadRate = 0
+      uploadRate = 0
+      if (wifiDevice) wifiDevice.scannerEnabled = false
     }
   }
 
@@ -134,6 +160,7 @@ Panel {
   onWifiNetworksChanged: {
     if (wifiNetworks.length === 0) {
       selectedIndex = -1
+      wifiActionFocused = false
       if (focusSection === "wifi") focusSection = "dns"
     } else if (passwordSsid !== "") {
       var passwordIndex = wifiIndexForSsid(passwordSsid)
@@ -145,6 +172,10 @@ Panel {
       selectedIndex = wifiNetworks.length - 1
     } else if (selectedIndex < 0 && opened) {
       selectedIndex = 0
+    }
+
+    if (selectedIndex < 0 || selectedIndex >= wifiNetworks.length || !canForgetNetwork(wifiNetworks[selectedIndex])) {
+      wifiActionFocused = false
     }
   }
 
@@ -159,6 +190,21 @@ Panel {
     if (wifiNetworks.length === 0) { selectedIndex = -1; return }
     if (selectedIndex < 0) selectedIndex = delta > 0 ? 0 : wifiNetworks.length - 1
     else selectedIndex = Math.max(0, Math.min(wifiNetworks.length - 1, selectedIndex + delta))
+    wifiActionFocused = false
+  }
+
+  function canForgetNetwork(net) {
+    return !!(net && net.known && isProtected(net.security) && !net.connected)
+  }
+
+  function selectWifiActionByDelta(delta) {
+    if (selectedIndex < 0 || selectedIndex >= wifiNetworks.length) return
+    if (!canForgetNetwork(wifiNetworks[selectedIndex])) {
+      wifiActionFocused = false
+      return
+    }
+    if (delta > 0) wifiActionFocused = true
+    else if (delta < 0) wifiActionFocused = false
   }
 
   // Enter/Space on the highlighted row. Mirrors row-click semantics:
@@ -168,18 +214,10 @@ Panel {
     if (busy || selectedIndex < 0 || selectedIndex >= wifiNetworks.length) return
     var net = wifiNetworks[selectedIndex]
     if (!net) return
+    if (wifiActionFocused && canForgetNetwork(net)) { forget(net); return }
     if (net.connected) { disconnect(net.network); return }
     if (isProtected(net.security) && !net.known) { openPasswordPrompt(net.ssid); return }
     connectKnown(net.ssid)
-  }
-
-  // 'x' on the highlighted row. Meaningful for saved/known networks
-  // (and the currently-connected row, if one is ever present); forget is
-  // hidden and a no-op otherwise.
-  function forgetSelected() {
-    if (busy || selectedIndex < 0 || selectedIndex >= wifiNetworks.length) return
-    var net = wifiNetworks[selectedIndex]
-    if (net && (net.connected || net.known)) forget(net)
   }
 
   // Bar pill state. Polled locally so this panel is self-contained;
@@ -231,17 +269,24 @@ Panel {
     syncWifiNetworks()
   }
 
-  function formatSpeed(mbps) {
+  function formatHeaderSpeed(mbps) {
     var v = parseInt(mbps, 10)
     if (!v || v < 0) return ""
-    if (v >= 1000) return (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + " Gbps"
-    return v + " Mbps"
+    if (v >= 1000) return (v / 1000).toFixed(v % 1000 === 0 ? 0 : 1) + "gbit"
+    return v + "mbit"
   }
 
-  function formatFreq(mhz) {
+  function formatHeaderFreq(mhz) {
     var v = parseFloat(mhz)
     if (!v) return ""
-    return (v / 1000).toFixed(1) + " GHz"
+    var ghz = v / 1000
+    return ghz.toFixed(ghz % 1 === 0 ? 0 : 1) + "ghz"
+  }
+
+  function headerDetail() {
+    if (info.type === "ethernet") return formatHeaderSpeed(info.speed || "")
+    if (info.type === "wifi") return formatHeaderFreq(info.freq || "")
+    return ""
   }
 
   function updateDetails(raw) {
@@ -255,6 +300,49 @@ Panel {
       next[line.substring(0, idx)] = line.substring(idx + 1).trim()
     }
     info = next
+    updateThroughput(next)
+  }
+
+  function updateThroughput(next) {
+    var iface = next.iface || ""
+    var rx = parseFloat(next.rx_bytes || "0")
+    var tx = parseFloat(next.tx_bytes || "0")
+    var now = Date.now() / 1000
+
+    // Interface changed (or first sample) — reseed without emitting a rate;
+    // raw counters from two different NICs are meaningless to subtract.
+    if (iface !== prevIface || prevSampleTime === 0) {
+      prevIface = iface
+      prevRxBytes = rx
+      prevTxBytes = tx
+      prevSampleTime = now
+      downloadRate = 0
+      uploadRate = 0
+      return
+    }
+
+    var dt = now - prevSampleTime
+    if (dt > 0) {
+      // Math.max guards against counter wrap or reset to 0 (interface flap).
+      downloadRate = Math.max(0, (rx - prevRxBytes) / dt)
+      uploadRate = Math.max(0, (tx - prevTxBytes) / dt)
+    }
+    prevRxBytes = rx
+    prevTxBytes = tx
+    prevSampleTime = now
+  }
+
+  function formatBytes(bytes) {
+    var n = Number(bytes)
+    if (!isFinite(n) || n < 0) n = 0
+    if (n < 1024) return Math.round(n) + " B"
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + " KB"
+    if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + " MB"
+    return (n / (1024 * 1024 * 1024)).toFixed(2) + " GB"
+  }
+
+  function formatRate(bytesPerSec) {
+    return formatBytes(bytesPerSec) + "/s"
   }
 
   function findDevice(type) {
@@ -283,7 +371,6 @@ Panel {
       checkActionCompletion(network)
       var isConnected = network.connected
       var ssid = network.name || ""
-      if (isConnected && ssid !== root.actionSsid) continue // Skip the connected network so it doesn't appear in the list, unless we are currently trying to connect to it
       nets.push({
         network: network,
         connected: isConnected,
@@ -294,11 +381,24 @@ Panel {
       })
     }
     nets.sort(function(a, b) {
+      if (a.connected !== b.connected) return a.connected ? -1 : 1
+      if (a.known !== b.known) return a.known ? -1 : 1
       return b.signal - a.signal
     })
     wifiNetworks = nets
     wifiStationAvailable = !!wifiDevice
     scanning = false
+  }
+
+  function wifiSectionTitle(index) {
+    if (index < 0 || index >= wifiNetworks.length) return ""
+
+    var net = wifiNetworks[index]
+    if (!net) return ""
+
+    if (net.known && index === 0) return "KNOWN NETWORKS"
+    if (!net.known && (index === 0 || (wifiNetworks[index - 1] && wifiNetworks[index - 1].known))) return "OTHER NETWORKS"
+    return ""
   }
 
   function wifiIconFor(strength) {
@@ -489,6 +589,39 @@ Panel {
   }
 
   Timer {
+    id: connectionPhraseTimer
+    interval: 2800
+    running: root.opened && (root.info.type === "ethernet" || (root.info.type === "wifi" && root.canDisconnect))
+    repeat: true
+    onTriggered: connectionPhraseSwap.restart()
+  }
+
+  SequentialAnimation {
+    id: connectionPhraseSwap
+    PropertyAnimation {
+      target: heroMeta; property: "opacity"
+      to: 0.0; duration: 180; easing.type: Easing.OutQuad
+    }
+    ScriptAction {
+      script: root.connectionPhraseIndex = (root.connectionPhraseIndex + 1) % root.connectionPhrases.length
+    }
+    PropertyAnimation {
+      target: heroMeta; property: "opacity"
+      to: 1.0; duration: 260; easing.type: Easing.InQuad
+    }
+  }
+
+  Connections {
+    target: root
+    function onInfoChanged() {
+      if (!(root.info.type === "ethernet" || (root.info.type === "wifi" && root.canDisconnect))) {
+        connectionPhraseSwap.stop()
+        heroMeta.opacity = 1.0
+      }
+    }
+  }
+
+  Timer {
     id: actionTimeout
     interval: 15000
     repeat: false
@@ -533,7 +666,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(340))
+    contentWidth: panel.fittedContentWidth(Style.space(380))
     contentHeight: panel.fittedContentHeight(column.implicitHeight)
 
     // Catches all unhandled keys for keyboard navigation. AfterItem priority
@@ -555,11 +688,14 @@ Panel {
           if (root.focusSection === "header") {
             if (dy > 0) root.focusSection = "dns"
           } else if (root.focusSection === "dns") {
-            // k from DNS moves up into header actions; j drops into the
-            // wifi list if there's anywhere to land.
+            // k from DNS moves up into the disconnect button when there is
+            // one; otherwise stays put. j drops into the wifi list if there's
+            // anywhere to land.
             if (dy < 0) {
-              root.focusSection = "header"
-              root.headerIndex = root.headerActionCount - 1  // refresh by default
+              if (root.headerHasDisconnect) {
+                root.focusSection = "header"
+                root.headerIndex = 0
+              }
             } else if (root.wifiNetworks.length > 0) {
               root.focusSection = "wifi"
               if (root.selectedIndex < 0) root.selectedIndex = 0
@@ -567,13 +703,17 @@ Panel {
           } else {  // wifi
             // k from the top row escapes back up into the DNS row rather
             // than wrapping around to the bottom of the list.
-            if (dy < 0 && root.selectedIndex <= 0) root.focusSection = "dns"
+            if (dy < 0 && root.selectedIndex <= 0) {
+              root.focusSection = "dns"
+              root.wifiActionFocused = false
+            }
             else root.selectByDelta(dy)
           }
         }
         if (dx !== 0) {
           if (root.focusSection === "header") root.selectHeaderByDelta(dx)
           else if (root.focusSection === "dns") root.selectDnsByDelta(dx)
+          else if (root.focusSection === "wifi") root.selectWifiActionByDelta(dx)
         }
       }
       onActivateRequested: {
@@ -584,9 +724,6 @@ Panel {
         }
       }
       onCloseRequested: root.close()
-      onDeleteRequested: {
-        if (root.cursorActive && root.focusSection === "wifi") root.forgetSelected()
-      }
       onTextKey: function(t) {
         if (t === "r" || t === "R") root.refresh()
       }
@@ -598,30 +735,26 @@ Panel {
       anchors.top: parent.top
       spacing: Style.space(12)
 
-      // Header — interface name + type, refresh on the right.
+      // ---------- Hero: network icon · SSID + state · actions ----------
       Item {
         width: parent.width
-        height: Math.max(headerInfo.implicitHeight, headerActions.implicitHeight)
+        implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight)
 
-        Item {
-          id: headerInfo
+        Text {
+          id: heroIcon
+          text: root.icon
+          color: root.bar.foreground
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.display
+          opacity: root.networkManagerAvailable ? 1.0 : 0.5
           anchors.left: parent.left
-          anchors.right: headerActions.left
-          anchors.rightMargin: Style.spacing.controlPaddingX
           anchors.verticalCenter: parent.verticalCenter
-          implicitHeight: Math.max(wifiToggleBtn.implicitHeight, wifiMainText.implicitHeight)
 
-          PanelActionButton {
-            id: wifiToggleBtn
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            iconText: root.icon
-            fontSize: Style.font.iconLarge
-            size: Style.space(28)
-            tooltipText: "Toggle Wi-Fi"
-            foreground: root.bar.foreground
-            hoverColor: root.bar.foreground // Override the dimming behavior
-            fontFamily: root.bar.fontFamily
+          MouseArea {
+            id: heroIconMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
             enabled: root.networkManagerAvailable
             onClicked: {
               Networking.wifiEnabled = !Networking.wifiEnabled
@@ -629,134 +762,140 @@ Panel {
             }
           }
 
+          PanelToolTip {
+            visible: heroIconMouse.containsMouse
+            text: root.info.type === "ethernet" ? "Toggle network" : "Toggle Wi-Fi"
+            fontFamily: root.bar.fontFamily
+          }
+        }
+
+        Column {
+          id: heroLabels
+          anchors.left: heroIcon.right
+          anchors.leftMargin: Style.space(14)
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          spacing: Style.space(2)
+
           Row {
-            anchors.left: wifiToggleBtn.right
-            anchors.leftMargin: Style.spacing.controlPaddingX
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
+            id: heroSsid
+            width: parent.width
+
+            readonly property string title: {
+              if (root.info.type === "wifi") return root.info.ssid || "Wi-Fi"
+              if (root.info.type === "ethernet") return "Ethernet"
+              return root.info.iface || (root.kind === "disconnected" ? "Disconnected" : "No connection")
+            }
+            readonly property string detail: root.headerDetail()
 
             Text {
-              id: wifiMainText
-              text: {
-                if (root.info.type === "wifi") return root.info.ssid || "Wi-Fi"
-                if (root.info.type === "ethernet") return "Ethernet"
-                return root.info.iface || (root.kind === "disconnected" ? "Disconnected" : "No connection")
-              }
+              text: heroSsid.title
+              width: Math.min(implicitWidth, Math.max(0, parent.width - (heroDetailPill.visible ? heroDetailPill.implicitWidth + Style.space(8) : 0)))
               color: root.bar.foreground
               font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.subtitle
+              font.pixelSize: Style.font.title
               font.bold: true
               elide: Text.ElideRight
-              width: Math.min(implicitWidth, parent.width - (wifiFreqText.visible ? wifiFreqText.implicitWidth : 0))
             }
 
-            Text {
-              id: wifiFreqText
-              visible: root.info.type === "wifi" && !!root.info.freq
-              text: " • " + root.formatFreq(root.info.freq)
-              color: Qt.darker(root.bar.foreground, 1.4)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.subtitle
-              font.bold: true
+            Item { width: Math.max(0, parent.width - parent.children[0].width - heroDetailPill.implicitWidth); height: 1 }
+
+            Rectangle {
+              id: heroDetailPill
+              visible: heroSsid.detail !== ""
+              implicitWidth: heroDetail.implicitWidth + Style.space(10)
+              implicitHeight: heroDetail.implicitHeight + Style.space(4)
+              anchors.verticalCenter: parent.verticalCenter
+              color: "transparent"
+              border.color: Style.normalBorderFor(root.bar.foreground)
+              border.width: Style.normalBorderWidth
+              radius: Style.cornerRadius
+
+              Text {
+                id: heroDetail
+                anchors.centerIn: parent
+                text: heroSsid.detail
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.body
+                font.bold: true
+              }
             }
+          }
+
+          Text {
+            id: heroMeta
+            width: parent.width
+            text: {
+              if (root.info.type === "wifi") {
+                if (root.canDisconnect) return root.connectionPhrase.toUpperCase()
+                if (root.kind === "disconnected") return "NOT CONNECTED"
+                return ""
+              }
+              if (root.info.type === "ethernet") return root.connectionPhrase.toUpperCase()
+              if (root.kind === "disconnected") return "NOT CONNECTED"
+              return ""
+            }
+            visible: text !== ""
+            color: Qt.darker(root.bar.foreground, 1.4)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: true
+            font.letterSpacing: 1.2
+            elide: Text.ElideRight
+          }
+        }
+
+      }
+
+      // Connection details: transfer metrics first, then IP/Gateway.
+      Column {
+        visible: !!root.info.iface
+        width: parent.width
+        spacing: Style.spacing.labelGap
+
+        Row {
+          visible: root.info.rx_bytes !== undefined
+          width: parent.width
+          spacing: Style.space(20)
+
+          Column {
+            width: (parent.width - parent.spacing) / 2
+            spacing: Style.spacing.labelGap
+            InfoPair { label: "Receiving"; value: root.formatRate(root.downloadRate) }
+            InfoPair { label: "Downloaded"; value: root.formatBytes(parseFloat(root.info.rx_bytes || "0")) }
+          }
+
+          Column {
+            width: (parent.width - parent.spacing) / 2
+            spacing: Style.spacing.labelGap
+            InfoPair { label: "Sending"; value: root.formatRate(root.uploadRate) }
+            InfoPair { label: "Uploaded"; value: root.formatBytes(parseFloat(root.info.tx_bytes || "0")) }
           }
         }
 
         Row {
-          id: headerActions
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          spacing: Style.spacing.controlGap
-
-          PanelActionButton {
-            id: disconnectBtn
-            visible: root.canDisconnect
-            enabled: !root.busy
-            hasCursor: root.cursorActive && root.focusSection === "header" && root.headerIndex === 0
-            iconText: "󰅙"
-            tooltipText: "Disconnect"
-            foreground: root.bar.foreground
-            hoverColor: root.bar.urgent
-            fontFamily: root.bar.fontFamily
-            anchors.verticalCenter: parent.verticalCenter
-            onHovered: function(h) {
-              if (!h) return
-              root.cursorActive = true
-              root.focusSection = "header"
-              root.headerIndex = 0
+          width: parent.width
+          spacing: Style.space(20)
+          Column {
+            width: (parent.width - parent.spacing) / 2
+            InfoPair {
+              visible: !!root.info.ip
+              label: "IP Address"
+              value: root.info.ip || ""
+              copyable: true
+              tooltipText: "Copy IP"
             }
-            onClicked: root.disconnect(root.connectedWifiNetwork)
           }
-
-          Button {
-            id: refreshBtn
-            anchors.verticalCenter: parent.verticalCenter
-            iconText: "󰑐"
-            iconSpinning: root.scanning
-            tooltipText: "Refresh"
-            foreground: root.bar.foreground
-            horizontalPadding: Style.spacing.controlGap
-            verticalPadding: Style.spacing.labelGap
-            iconSize: Style.font.icon
-            active: root.scanning
-            hasCursor: root.cursorActive && root.focusSection === "header" && root.headerIndex === (root.canDisconnect ? 1 : 0)
-            onHovered: function(h) {
-              if (!h) return
-              root.cursorActive = true
-              root.focusSection = "header"
-              root.headerIndex = root.canDisconnect ? 1 : 0
+          Column {
+            width: (parent.width - parent.spacing) / 2
+            InfoPair {
+              visible: !!root.info.gateway
+              label: "Gateway"
+              value: root.info.gateway || ""
+              copyable: true
+              tooltipText: "Copy gateway"
             }
-            onClicked: root.refresh(true)
-          }
-        }
-      }
-
-      // Connection details: IP, gateway, link speed, etc.
-      Row {
-        visible: !!root.info.iface
-        anchors.horizontalCenter: parent.horizontalCenter
-        spacing: Style.space(24)
-
-        Column {
-          width: Style.space(140)
-          spacing: Style.spacing.labelGap
-          InfoPair {
-            visible: !!root.info.ip
-            label: "IP"
-            value: root.info.ip || ""
-            copyable: true
-            tooltipText: "Copy IP"
-          }
-          InfoPair {
-            visible: !!root.info.gateway
-            label: "Gateway"
-            value: root.info.gateway || ""
-            copyable: true
-            tooltipText: "Copy gateway"
-          }
-        }
-
-        Column {
-          width: Style.space(140)
-          spacing: Style.spacing.labelGap
-
-          // Ethernet details
-          InfoPair {
-            visible: root.info.type === "ethernet" && !!root.info.speed
-            label: "Link"
-            value: root.formatSpeed(root.info.speed || "")
-          }
-
-          // Wi-Fi details
-          InfoPair {
-            visible: root.info.type === "wifi" && !!root.info.signal_dbm
-            label: "Signal"
-            value: (root.info.signal_dbm || "") + " dBm"
-          }
-          InfoPair {
-            visible: root.info.type === "wifi" && !!root.info.bitrate
-            label: "Link"
-            value: root.info.bitrate || ""
           }
         }
       }
@@ -768,22 +907,27 @@ Panel {
 
       Column {
         width: parent.width
-        spacing: Style.space(8)
+        spacing: Style.space(10)
 
         PanelSectionHeader {
-          text: "DNS provider"
+          text: "DNS PROVIDER"
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
         }
 
         Row {
+          id: dnsRow
           width: parent.width
           spacing: Style.space(6)
+
+          readonly property int count: 4
+          readonly property real cellWidth: (width - spacing * (count - 1)) / count
 
           DnsProviderPill {
             provider: "DHCP"
             index: 0
             tooltipText: "Use DNS from DHCP"
+            width: dnsRow.cellWidth
             onClicked: root.setDns(provider)
           }
 
@@ -791,6 +935,7 @@ Panel {
             provider: "Cloudflare"
             index: 1
             tooltipText: "Set DNS to Cloudflare"
+            width: dnsRow.cellWidth
             onClicked: root.setDns(provider)
           }
 
@@ -798,6 +943,7 @@ Panel {
             provider: "Google"
             index: 2
             tooltipText: "Set DNS to Google"
+            width: dnsRow.cellWidth
             onClicked: root.setDns(provider)
           }
 
@@ -805,6 +951,7 @@ Panel {
             provider: "Custom"
             index: 3
             tooltipText: "Set custom DNS servers"
+            width: dnsRow.cellWidth
             onClicked: root.setDns(provider)
           }
         }
@@ -817,8 +964,8 @@ Panel {
       }
 
       PanelSectionHeader {
-        visible: root.wifiStationAvailable
-        text: root.scanning ? "Scanning Wi-Fi…" : "Wi-Fi networks"
+        visible: root.wifiStationAvailable && root.scanning
+        text: "SCANNING WI-FI…"
         foreground: root.bar.foreground
         fontFamily: root.bar.fontFamily
       }
@@ -850,13 +997,29 @@ Panel {
         delegate: Item {
           required property var modelData
           required property int index
+          readonly property string sectionTitle: root.wifiSectionTitle(index)
           width: ListView.view.width
-          height: row.implicitHeight
-          NetworkRow {
-            id: row
+          height: delegateColumn.implicitHeight
+
+          Column {
+            id: delegateColumn
             width: parent.width
-            net: parent.modelData
-            index: parent.index
+            spacing: Style.space(4)
+
+            PanelSectionHeader {
+              visible: sectionTitle !== ""
+              text: sectionTitle
+              foreground: root.bar.foreground
+              fontFamily: root.bar.fontFamily
+              height: visible ? implicitHeight : 0
+            }
+
+            NetworkRow {
+              id: row
+              width: parent.width
+              net: modelData
+              index: parent.parent.index
+            }
           }
         }
       }
@@ -873,10 +1036,12 @@ Panel {
     required property int index
 
     text: provider
+    fontSize: Style.font.bodySmall
     foreground: root.bar.foreground
     fontFamily: root.bar.fontFamily
     horizontalPadding: Style.spacing.controlPaddingX
-    verticalPadding: Style.spacing.controlPaddingY
+    verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
+    bordered: true
 
     // Map the panel's domain semantics onto Button's structural props:
     // `current DNS` is the pill's `active` fill; the keyboard cursor lights
@@ -895,7 +1060,7 @@ Panel {
   // A single Wi-Fi network entry. Collapses to a one-line pill normally;
   // expands inline to a passphrase prompt when the user picks a protected
   // network we don't have credentials for. Clicking a connected row
-  // disconnects; the X button on any saved/connected row forgets it.
+  // disconnects.
   component NetworkRow: CursorSurface {
     id: row
     required property var net
@@ -904,10 +1069,12 @@ Panel {
     readonly property bool isConnected: net && net.connected
     readonly property bool isKnown: !!(net && net.known)
     readonly property bool isProtected: net ? root.isProtected(net.security) : false
-    readonly property bool canForget: isConnected || isKnown
+    readonly property bool canForgetFromLock: isKnown && isProtected && !isConnected
     readonly property bool isSelected: root.focusSection === "wifi" && root.selectedIndex === index
+    readonly property bool forgetFocused: isSelected && root.wifiActionFocused && canForgetFromLock
+    readonly property bool forgetVisible: canForgetFromLock && (forgetFocused || rightMouse.containsMouse)
 
-    hasCursor: root.cursorActive && isSelected
+    hasCursor: root.cursorActive && isSelected && !root.wifiActionFocused
     current: isConnected
     foreground: root.bar.foreground
     fill: root.hoverFill
@@ -969,7 +1136,7 @@ Panel {
       // Move the cursor here when the mouse enters; mouse leaving doesn't
       // clear it (so the cursor stays where the mouse last was and
       // subsequent j/k pick up from this row).
-      onContainsMouseChanged: if (containsMouse) { root.cursorActive = true; root.focusSection = "wifi"; root.selectedIndex = row.index }
+      onContainsMouseChanged: if (containsMouse) { root.cursorActive = true; root.focusSection = "wifi"; root.selectedIndex = row.index; root.wifiActionFocused = false }
 
       onClicked: {
         if (!row.net) return
@@ -978,6 +1145,7 @@ Panel {
         root.cursorActive = true
         root.focusSection = "wifi"
         root.selectedIndex = row.index
+        root.wifiActionFocused = false
         if (row.isConnected) {
           root.disconnect(row.net.network)
           return
@@ -997,7 +1165,7 @@ Panel {
       anchors.top: parent.top
       anchors.leftMargin: Style.space(10)
       anchors.rightMargin: Style.space(10)
-      implicitHeight: Math.max(networkIcon.implicitHeight, networkInfo.implicitHeight, forgetBtn.implicitHeight) + Style.spacing.rowPaddingX
+      implicitHeight: Math.max(networkIcon.implicitHeight, networkInfo.implicitHeight, rightAction.implicitHeight) + Style.spacing.rowPaddingX
 
       Text {
         id: networkIcon
@@ -1009,34 +1177,53 @@ Panel {
         anchors.verticalCenter: parent.verticalCenter
       }
 
-      PanelActionButton {
-        id: forgetBtn
-        anchors.right: lockIndicator.visible ? lockIndicator.left : parent.right
-        anchors.rightMargin: lockIndicator.visible ? Style.space(4) : 0
-        anchors.verticalCenter: parent.verticalCenter
-        visible: row.canForget
-        enabled: !root.busy
-        iconText: "󰅙"
-        tooltipText: "Forget network"
-        foreground: root.bar.foreground
-        hoverColor: root.bar.urgent
-        fontFamily: root.bar.fontFamily
-        onClicked: if (row.net) root.forget(row.net)
-      }
-
-      // Shows a lock glyph for protected disconnected networks at the far
-      // right, with the forget X to its left when the network is saved.
-      Text {
-        id: lockIndicator
-        visible: row.isProtected && !row.isConnected
+      // Shows a lock glyph for protected networks. Known disconnected
+      // networks reveal the forget action when hovering that right edge.
+      Item {
+        id: rightAction
+        visible: row.isProtected
         width: Style.space(22)
+        implicitHeight: lockIndicator.implicitHeight
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
-        horizontalAlignment: Text.AlignHCenter
-        text: "󰌾"
-        color: Qt.darker(root.bar.foreground, 1.4)
-        font.family: root.bar.fontFamily
-        font.pixelSize: Style.font.subtitle
+
+        Text {
+          id: lockIndicator
+          width: parent.width
+          anchors.verticalCenter: parent.verticalCenter
+          horizontalAlignment: Text.AlignHCenter
+          text: row.forgetVisible ? "󰅙" : "󰌾"
+          color: row.forgetVisible ? root.bar.urgent : Qt.darker(root.bar.foreground, 1.4)
+          font.family: root.bar.fontFamily
+          font.pixelSize: Style.font.subtitle
+        }
+
+        Rectangle {
+          anchors.fill: parent
+          visible: row.forgetFocused
+          color: Style.hoverFillFor(root.bar.urgent, root.bar.urgent)
+          border.color: Style.hoverBorderFor(root.bar.urgent, root.bar.urgent)
+          border.width: Style.hoverBorderWidth
+          radius: Style.cornerRadius
+          z: -1
+        }
+
+        MouseArea {
+          id: rightMouse
+          anchors.fill: parent
+          hoverEnabled: true
+          acceptedButtons: Qt.LeftButton
+          enabled: row.canForgetFromLock && !root.busy
+          cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+          onContainsMouseChanged: if (containsMouse) { root.cursorActive = true; root.focusSection = "wifi"; root.selectedIndex = row.index; root.wifiActionFocused = true }
+          onClicked: if (row.net) root.forget(row.net)
+        }
+
+        PanelToolTip {
+          visible: rightMouse.containsMouse || row.forgetFocused
+          text: "Forget network"
+          fontFamily: root.bar.fontFamily
+        }
       }
 
       Column {
@@ -1044,10 +1231,9 @@ Panel {
         spacing: Style.space(1)
         anchors.left: networkIcon.right
         anchors.leftMargin: Style.space(10)
-        anchors.right: forgetBtn.visible ? forgetBtn.left
-                      : lockIndicator.visible ? lockIndicator.left
+        anchors.right: rightAction.visible ? rightAction.left
                       : parent.right
-        anchors.rightMargin: (forgetBtn.visible || lockIndicator.visible) ? Style.space(8) : 0
+        anchors.rightMargin: rightAction.visible ? Style.space(8) : 0
         anchors.verticalCenter: parent.verticalCenter
 
         Text {
@@ -1111,7 +1297,7 @@ Panel {
         anchors.rightMargin: Style.space(6)
         password: true
         placeholderText: "Passphrase"
-        font.family: root.bar.fontFamily
+        font.family: Style.font.family
         font.pixelSize: Style.font.body
         foreground: root.bar.foreground
         horizontalPadding: Style.spacing.controlGap
@@ -1152,8 +1338,8 @@ Panel {
         }
       }
 
-      // 22×22 right-anchored to line up with forgetBtn and lockIndicator
-      // above. Esc closes the prompt (handled by pwField.Keys.onEscapePressed)
+      // 22×22 right-anchored to line up with lockIndicator above. Esc closes
+      // the prompt (handled by pwField.Keys.onEscapePressed)
       // so there's no separate cancel button.
       PanelActionButton {
         id: connectPwBtn

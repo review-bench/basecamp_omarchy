@@ -210,7 +210,7 @@ Panel {
     }
 
     root.brightnessSetQueued = false
-    setBrightnessProc.command = ["bash", "-lc", "omarchy-brightness-display " + percent + "%"]
+    setBrightnessProc.command = ["bash", "-lc", "omarchy-brightness-display --no-osd " + percent + "%"]
     setBrightnessProc.running = true
   }
 
@@ -223,6 +223,21 @@ Panel {
     var n = parseFloat(String(scale || ""))
     if (!isFinite(n)) return ""
     return String(Math.round(n * 100) / 100)
+  }
+
+  // Playful mood-name for a given brightness percent. Bands intentionally
+  // span ~10–20 points so casual tweaks change the label, while small
+  // nudges within one band don't.
+  function brightnessName(percent) {
+    var p = Math.round(percent)
+    if (p >= 95) return "Sun blast"
+    if (p >= 80) return "Solar flare"
+    if (p >= 65) return "Golden hour"
+    if (p >= 45) return "Even day"
+    if (p >= 30) return "Soft glow"
+    if (p >= 20) return "Lamp light"
+    if (p >= 10) return "Candlelit"
+    return "Night owl"
   }
 
   function updateDisplays(displaysJson) {
@@ -355,7 +370,7 @@ Panel {
     bar: root.bar
     open: root.opened
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(320))
+    contentWidth: panel.fittedContentWidth(Style.space(380))
     contentHeight: panel.fittedContentHeight(panelColumn.implicitHeight, Style.space(560))
 
     PanelKeyCatcher {
@@ -384,71 +399,110 @@ Panel {
           width: scrollArea.availableWidth
           spacing: Style.space(14)
 
-          // ---- Brightness ----
+          // ---------- Hero: display icon · title/status ----------
+          Item {
+            width: parent.width
+            visible: root.brightnessAvailable
+            implicitHeight: Math.max(heroIcon.implicitHeight, heroLabels.implicitHeight)
+
+            Text {
+              id: heroIcon
+              text: root.displays.length > 1 ? "󰍺" : "󰍹"
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.display
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Column {
+              id: heroLabels
+              anchors.left: heroIcon.right
+              anchors.leftMargin: Style.space(14)
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(2)
+
+              Text {
+                text: "Display"
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.title
+                font.bold: true
+                elide: Text.ElideRight
+                width: parent.width
+              }
+
+              Text {
+                id: heroLabel
+                text: root.brightnessName(brightnessSlider.dragging ? brightnessSlider.liveValue : root.brightnessPercent).toUpperCase()
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                font.letterSpacing: 1.2
+                elide: Text.ElideRight
+                width: parent.width
+              }
+            }
+          }
+
+          // ---------- Brightness ----------
           Column {
+            visible: root.brightnessAvailable
             width: parent.width
             spacing: Style.space(6)
 
-            PanelSectionHeader {
-              text: "Brightness"
-              foreground: root.bar.foreground
-              fontFamily: root.bar.fontFamily
-              fontSize: Style.font.bodySmall
+            Item {
+              width: parent.width
+              implicitHeight: Math.max(brightnessHeader.implicitHeight, brightnessPercent.implicitHeight)
+
+              PanelSectionHeader {
+                id: brightnessHeader
+                text: "BRIGHTNESS"
+                foreground: root.bar.foreground
+                fontFamily: root.bar.fontFamily
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Text {
+                id: brightnessPercent
+                text: Math.round(brightnessSlider.dragging ? brightnessSlider.liveValue : root.brightnessPercent) + "%"
+                color: Qt.darker(root.bar.foreground, 1.4)
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: true
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(6)
+                anchors.verticalCenter: parent.verticalCenter
+              }
             }
 
             CursorSurface {
               id: brightnessRow
-              visible: root.brightnessAvailable
               width: parent.width
-              height: brightnessInner.implicitHeight + Style.spacing.controlGap
+              height: brightnessSlider.implicitHeight + Style.spacing.controlGap
               hasCursor: root.cursorActive && root.focusSection === "brightness" && root.selectedIndex === -1
               onHasCursorChanged: if (hasCursor) root.ensureCursorVisible(brightnessRow)
               foreground: root.bar.foreground
               outline: true
 
-              Row {
-                id: brightnessInner
+              PanelSlider {
+                id: brightnessSlider
+                bar: root.bar
                 anchors.fill: parent
                 anchors.leftMargin: Style.space(6)
                 anchors.rightMargin: Style.space(6)
-                spacing: Style.space(8)
-
-                Text {
-                  text: "󰃠"
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.heading
-                  width: Style.space(22)
-                  horizontalAlignment: Text.AlignHCenter
-                  anchors.verticalCenter: parent.verticalCenter
-                }
-
-                PanelSlider {
-                  id: brightnessSlider
-                  bar: root.bar
-                  width: parent.width - Style.space(22) - brightnessLabel.width - Style.space(16)
-                  anchors.verticalCenter: parent.verticalCenter
-                  minimum: 1
-                  maximum: 100
-                  step: 1
-                  value: root.brightnessPercent
-                  integer: true
-                  onMoved: function(v) { root.previewBrightness(v) }
-                  onReleased: function(v) {
-                    brightnessDebounce.stop()
-                    root.setBrightness(v)
-                  }
-                }
-
-                Text {
-                  id: brightnessLabel
-                  text: Math.round(brightnessSlider.dragging ? brightnessSlider.liveValue : root.brightnessPercent) + "%"
-                  color: root.bar.foreground
-                  font.family: root.bar.fontFamily
-                  font.pixelSize: Style.font.bodySmall
-                  width: Style.space(36)
-                  horizontalAlignment: Text.AlignRight
-                  anchors.verticalCenter: parent.verticalCenter
+                minimum: 1
+                maximum: 100
+                step: 1
+                value: root.brightnessPercent
+                integer: true
+                onMoved: function(v) { root.previewBrightness(v) }
+                onReleased: function(v) {
+                  brightnessDebounce.stop()
+                  root.setBrightness(v)
                 }
               }
 
@@ -460,31 +514,35 @@ Panel {
                 }
               }
             }
-
-            Text {
-              visible: !root.brightnessAvailable
-              text: "No controllable backlight found"
-              color: Qt.darker(root.bar.foreground, 1.5)
-              font.family: root.bar.fontFamily
-              font.pixelSize: Style.font.bodySmall
-            }
           }
 
-          // ---- Scale ----
+          Text {
+            visible: !root.brightnessAvailable
+            text: "No controllable backlight found"
+            color: Qt.darker(root.bar.foreground, 1.5)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          // ---------- Scale ----------
           Column {
             width: parent.width
-            spacing: Style.space(6)
+            spacing: Style.space(10)
 
             PanelSectionHeader {
-              text: "Scale"
+              text: "SCALE"
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
-              fontSize: Style.font.bodySmall
             }
 
             Row {
+              id: scaleRow
               width: parent.width
               spacing: Style.space(6)
+
+              readonly property real cellWidth: root.scaleValues.length > 0
+                ? (width - spacing * (root.scaleValues.length - 1)) / root.scaleValues.length
+                : 0
 
               Repeater {
                 model: root.scaleValues
@@ -495,22 +553,22 @@ Panel {
 
                   scaleValue: modelData
                   scaleIndex: index
+                  width: scaleRow.cellWidth
                 }
               }
             }
           }
 
-          // ---- Monitors ----
+          // ---------- Monitors ----------
           Column {
             width: parent.width
-            spacing: Style.space(6)
+            spacing: Style.space(10)
             visible: root.displays.length > 1
 
             PanelSectionHeader {
-              text: "Monitors"
+              text: "DISPLAYS"
               foreground: root.bar.foreground
               fontFamily: root.bar.fontFamily
-              fontSize: Style.font.bodySmall
             }
 
             Repeater {
@@ -537,10 +595,12 @@ Panel {
     required property int scaleIndex
 
     text: scaleValue + "x"
+    fontSize: Style.font.bodySmall
     foreground: root.bar.foreground
     fontFamily: root.bar.fontFamily
     horizontalPadding: Style.spacing.controlPaddingX
-    verticalPadding: Style.spacing.controlPaddingY
+    verticalPadding: Style.spacing.controlPaddingY + Style.space(2)
+    bordered: true
 
     active: root.normalizeScale(root.monitorScale) === root.normalizeScale(scaleValue)
     hasCursor: root.cursorActive && root.focusSection === "scale" && root.selectedIndex === scaleIndex
