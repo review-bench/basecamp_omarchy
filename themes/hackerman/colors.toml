@@ -1,3 +1,5 @@
+mode = "dark"
+
 accent = "#82FB9C"
 cursor = "#ddf7ff"
 foreground = "#ddf7ff"

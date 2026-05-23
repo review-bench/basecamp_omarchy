@@ -165,12 +165,22 @@ if [[ -f $COLORS_FILE ]]; then
   [[ ${THEME_COLORS[bright_blue]} ]]   || THEME_COLORS[bright_blue]=$(mix_color "${THEME_COLORS[blue]}" "#ffffff" 20%)
   [[ ${THEME_COLORS[bright_purple]} ]] || THEME_COLORS[bright_purple]=$(mix_color "${THEME_COLORS[purple]}" "#ffffff" 20%)
 
-  # Auto-detect theme type (dark/light) from background luminance
-  if [[ ! ${THEME_COLORS[theme_type]} ]]; then
-    bg_hex="${THEME_COLORS[background]#\#}"
-    lum=$(( $(printf "%d" "0x${bg_hex:0:2}") + $(printf "%d" "0x${bg_hex:2:2}") + $(printf "%d" "0x${bg_hex:4:2}") ))
-    [[ $lum -gt 382 ]] && THEME_COLORS[theme_type]="light" || THEME_COLORS[theme_type]="dark"
+  # Resolve theme mode (dark|light) with this precedence:
+  #   1. `mode` key in colors.toml
+  #   2. legacy `light.mode` file shipped beside the theme
+  #   3. background luminance auto-detect
+  # `theme_type` is kept as an alias so existing templates ({{ theme_type }}) keep working.
+  [[ ${THEME_COLORS[mode]} ]] || THEME_COLORS[mode]="${THEME_COLORS[theme_type]}"
+  if [[ ! ${THEME_COLORS[mode]} ]]; then
+    if [[ -f $NEXT_THEME_DIR/light.mode ]]; then
+      THEME_COLORS[mode]="light"
+    else
+      bg_hex="${THEME_COLORS[background]#\#}"
+      lum=$(( $(printf "%d" "0x${bg_hex:0:2}") + $(printf "%d" "0x${bg_hex:2:2}") + $(printf "%d" "0x${bg_hex:4:2}") ))
+      [[ $lum -gt 382 ]] && THEME_COLORS[mode]="light" || THEME_COLORS[mode]="dark"
+    fi
   fi
+  THEME_COLORS[theme_type]="${THEME_COLORS[mode]}"
 
   for key in "${!THEME_COLORS[@]}"; do
     add_template_value "$key" "${THEME_COLORS[$key]}"

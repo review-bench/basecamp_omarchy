@@ -1,3 +1,5 @@
+mode = "light"
+
 # UI Colors (extended)
 accent = "#6e6e6e"
 cursor = "#000000"
